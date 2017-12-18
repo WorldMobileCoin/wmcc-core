@@ -1,0 +1,25 @@
+{
+  "name": "wmcc-core",
+  "version": "1.0.0-beta.1",
+  "release": "20 December 2017",
+  "description": "WorldMobileCoin © WMCC Core Library",
+  "repository": "git://github.com/WorldMobileCoin/wmcc-core.git",
+  "homepage": "https://github.com/WorldMobileCoin/wmcc-core",
+  "bugs": {
+    "url": "https://github.com/WorldMobileCoin/wmcc-core/issues"
+  },
+  "author": "ParkAlter@WorldMobileCoin <worldmobilecoin@gmail.com>",
+  "keywords": [
+    "worldmobilecoin",
+    "wmcc",
+    "wmcc-core",
+    "blockchain",
+    "cryptocurrency",
+    "wallet"
+  ],
+  "engines": {
+    "node": ">=8.0.0"
+  },
+  "main": "./lib/wmcc-core.js",
+  "license": "MIT"
+}
