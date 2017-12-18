@@ -23,6 +23,6 @@ all code is your original work.
 
 ## License
 
---Copyright (c) 2017, Park Alter (pseudonym)__
---Distributed under the MIT software license, see the accompanying__
+--Copyright (c) 2017, Park Alter (pseudonym)  
+--Distributed under the MIT software license, see the accompanying  
 --file COPYING or http://www.opensource.org/licenses/mit-license.php 
