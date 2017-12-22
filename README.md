@@ -1,14 +1,14 @@
-# wmcc-desktop (WorldMobileCoin)
+# wmcc-core (WorldMobileCoin)
 
-__NOTE__: The first release of wmcc-desktop.
+__NOTE__: The first release of wmcc-core.
 
 ---
 
-**WorldMobileCoin** is a new generation of cryptocurrency.
+**WorldMobileCoin** is a new cryptocurrency.
 
 Although still in a beta state, wmcc-core is well tested and aware of all known
-consensus rules. It is currently used in production as wallet system front-end
-for https://www.worldmobilecoin.com
+consensus rules. It is currently used in production as the consensus backend
+and wallet system for https://www.worldmobilecoin.com
 
 ## Disclaimer
 
@@ -25,4 +25,4 @@ all code is your original work.
 
 --Copyright (c) 2017, Park Alter (pseudonym)  
 --Distributed under the MIT software license, see the accompanying  
---file COPYING or http://www.opensource.org/licenses/mit-license.php
+--file COPYING or http://www.opensource.org/licenses/mit-license.php 
