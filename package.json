@@ -1,7 +1,7 @@
 {
   "name": "wmcc-core",
-  "version": "1.0.0-beta.15",
-  "release": "20 December 2017",
+  "version": "1.0.1-beta.1",
+  "release": "25 June 2018",
   "description": "WorldMobileCoin © WMCC Core Library",
   "repository": "git://github.com/WorldMobileCoin/wmcc-core.git",
   "homepage": "https://github.com/WorldMobileCoin/wmcc-core",
