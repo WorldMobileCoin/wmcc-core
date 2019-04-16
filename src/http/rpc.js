@@ -154,11 +154,21 @@ RPC.prototype.init = function init() {
   this.add('sendrawtransaction', this.sendRawTransaction);
   this.add('signrawtransaction', this.signRawTransaction);
 
+  this.add('createsigntransaction', this.createSignTransaction);
+  this.add('querybalance', this.queryBalance);
+
   this.add('gettxoutproof', this.getTXOutProof);
   this.add('verifytxoutproof', this.verifyTXOutProof);
 
   this.add('getmemoryinfo', this.getMemoryInfo);
   this.add('setloglevel', this.setLogLevel);
+
+  this.add('generateaddress', this.generateAddress);
+  this.add('addressfromprivkey', this.addressFromPrivkey);
+
+  this.add('subscribe', this.subscribe);
+  this.add('unsubscribe', this.unsubscribe);
+  this.add('subscribers', this.subscribers);
 };
 
 /*
@@ -1910,6 +1920,93 @@ RPC.prototype.signRawTransaction = async function signRawTransaction(args, help)
   };
 };
 
+RPC.prototype.createSignTransaction = async function createSignTransaction(args, help) {
+  if (help || args.length < 4 || args.length > 5)
+    throw new RPCError(errs.MISC_ERROR,
+      'createsigntransaction "from" "privatekey" "to" "amount" {"amount|rate": "value", ("max": "value")}');
+
+  const valid = new Validator([args]);
+  const from = valid.str(0);
+  const privateKey = valid.buf(1);
+  const to = valid.str(2);
+  const amount = valid.ufixed(3, 8)
+  const fee = valid.obj(4);
+
+  if (!from || !privateKey || !to || !amount)
+    throw new RPCError(errs.INVALID_PARAMETER,
+      '`from`, `privatekey`, `to` and `amount` are required.');
+
+  if (!fee.hasOwnProperty('amount') && !fee.hasOwnProperty('rate'))
+    throw new RPCError(errs.INVALID_PARAMETER,
+      'Amount or rate is required for `fee` parameter.');
+
+  if (fee.hasOwnProperty('amount') && fee.hasOwnProperty('rate'))
+    throw new RPCError(errs.INVALID_PARAMETER,
+      'Pick either `amount` or `rate` to use for transaction fee.');
+
+  const fromAddr = parseAddress(from, this.network);
+  const toAddr = parseAddress(to, this.network);
+
+  const feevalid = new Validator([fee]);
+  const hardFee = feevalid.ufixed('amount', 8);
+  const rate = feevalid.ufixed('rate', 8);
+  const maxFee = feevalid.ufixed('max', 8);
+
+  const mtx = new MTX();
+
+  const output = new Output();
+  output.value = amount;
+  output.script.fromAddress(toAddr);
+
+  if (output.isDust())
+    throw new RPCError(errs.INVALID_PARAMETER, '`to` amount is dust.');
+
+  mtx.outputs.push(output);
+
+  const coins = await this.chain.getCoinsByAddress(fromAddr);
+
+  const options = {
+    hardFee,
+    rate,
+    maxFee,
+    changeAddress: fromAddr
+  }
+
+  const keyring = new KeyRing({witness: true, privateKey, network: this.network});
+
+  await mtx.fund(coins, options);
+  mtx.sign(keyring);
+
+  if (!mtx.isSigned())
+    throw new RPCError(errs.MISC_ERROR, 'Couldn\'t sign this transaction.');
+
+  return mtx.toTX().toRaw().toString('hex');
+};
+
+RPC.prototype.queryBalance = async function queryBalance(args, help) {
+  if (help || args.length !== 1)
+    throw new RPCError(errs.MISC_ERROR, 'querybalance "address"');
+
+  const valid = new Validator([args]);
+  const str = valid.str(0);
+
+  const addr = parseAddress(str, this.network);
+
+  const chain = await this.chain.getCoinsByAddress(addr);
+
+  let total = 0
+  for (const coin of chain) {
+    const spent = this.mempool.isSpent(coin.hash, coin.index);
+
+    if (spent)
+      continue;
+
+    total += coin.value
+  }
+
+  return Amount.wmcc(total);
+};
+
 /*
  * Utility Functions
  */
@@ -2182,6 +2279,84 @@ RPC.prototype.setLogLevel = async function setLogLevel(args, help) {
   this.logger.setLevel(level);
 
   return null;
+};
+
+RPC.prototype.generateAddress = async function generateAddress(args, help) {
+  if (help || args.length !== 0)
+    throw new RPCError(errs.MISC_ERROR, 'generateaddress');
+
+  const {privateKey, network} = KeyRing.generate(true, this.network);
+  const keyring = new KeyRing({witness: true, privateKey, network});
+
+  return {
+    address: keyring.getAddress('string'),
+    privateKey: keyring.getPrivateKey('hex')
+  }
+};
+
+RPC.prototype.addressFromPrivkey = async function addressFromPrivkey(args, help) {
+  if (help || args.length !== 1)
+    throw new RPCError(errs.MISC_ERROR, 'addressfromprivkey "privatekey"');
+
+  const valid = new Validator([args]);
+  const privateKey = valid.buf(0);
+
+  try {
+    const keyring = new KeyRing({witness: true, privateKey, network: this.network});
+
+    return {
+      address: keyring.getAddress('string'),
+      privateKey: keyring.getPrivateKey('hex')
+    }
+  } catch(e) {
+    this.logger.error(e);
+    throw new RPCError(errs.TYPE_ERROR, 'Invalid private key.');
+  }
+};
+
+RPC.prototype.subscribe = async function subscribe(args, help) {
+  if (help || args.length < 1 || args.length > 2)
+    throw new RPCError(errs.MISC_ERROR, 'subscribe ["address,..."] (confirmations)');
+
+  const valid = new Validator([args]);
+  const addrs = valid.array(0);
+  const confirmation = valid.u32(1, 0);
+
+  for (const [idx, addr] of addrs.entries())
+    parseAddress(addr, this.network);
+
+  if (!this.chain.options.subscribeCmd)
+    throw new RPCError(errs.MISC_ERROR, 'Subscription command is not set in config.');
+
+  this.chain.unsubscribe(addrs);
+  this.chain.subscribe(addrs, confirmation);
+
+  return true
+};
+
+RPC.prototype.unsubscribe = async function unsubscribe(args, help) {
+  if (help || args.length !== 1)
+    throw new RPCError(errs.MISC_ERROR, 'unsubscribe ["address,..."]');
+
+  const valid = new Validator([args]);
+  const addrs = valid.array(0);
+
+  for (const [idx, addr] of addrs.entries())
+    parseAddress(addr, this.network);
+
+  this.chain.unsubscribe(addrs);
+
+  return true
+};
+
+RPC.prototype.subscribers = async function subscribers(args, help) {
+  if (help || args.length !== 0)
+    throw new RPCError(errs.MISC_ERROR, 'subscribers');
+
+  if (!this.chain.options.subscribeCmd)
+    throw new RPCError(errs.MISC_ERROR, 'Subscription command is not set in config.');
+
+  return Object.keys(this.chain.subscribers);
 };
 
 /*

@@ -1349,6 +1349,41 @@ ChainDB.prototype.getMetaByAddress = async function getMetaByAddress(addrs) {
 };
 
 /**
+ * Get fifo coins pertinent to an address.
+ * @param {Address[]} addrs
+ * @param {Amount} minimum amount
+ * @returns {Promise} - Returns {@link Coin}[].
+ */
+
+ChainDB.prototype.getFifoByAddress = async function getFifoByAddress(addr, min) {
+  if (!this.options.indexAddress)
+    return [];
+
+  const hash = Address.getHash(addr);
+
+  const keys = await this.db.keys({
+    gte: layout.C(hash, encoding.ZERO_HASH, 0),
+    lte: layout.C(hash, encoding.MAX_HASH, 0xffffffff),
+    parse: layout.Cc
+  });
+
+  const coins = [];
+  let total = 0;
+  for (const [hash, index] of keys) {
+    const coin = await this.getCoin(hash, index);
+    assert(coin);
+
+    total += coin.value;
+    coins.push(coin);
+
+    if(min && total >= min)
+      break;
+  }
+
+  return {coins, total};
+};
+
+/**
  * Scan the blockchain for transactions containing specified address hashes.
  * @param {Hash} start - Block hash to start at.
  * @param {Bloom} filter - Bloom filter containing tx and address hashes.

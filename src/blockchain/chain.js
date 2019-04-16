@@ -13,6 +13,7 @@
 
 const assert = require('assert');
 const path = require('path');
+const {exec} = require('child_process');
 const AsyncObject = require('../utils/asyncobject');
 const Network = require('../protocol/network');
 const Logger = require('../node/logger');
@@ -88,6 +89,17 @@ function Chain(options) {
 
   this.orphanMap = new Map();
   this.orphanPrev = new Map();
+
+  this.subscribers = {};
+  this.subscribeJobs = {};
+  this._subscribes = {
+    cmds: [],
+    cp: null
+  };
+  this._notifies = {
+    cmds: [],
+    cp: null
+  };
 }
 
 Object.setPrototypeOf(Chain.prototype, AsyncObject.prototype);
@@ -1179,6 +1191,15 @@ Chain.prototype.setBestChain = async function setBestChain(entry, block, prev, f
   // Save block and connect inputs.
   await this.db.save(entry, block, view);
 
+  // To execute new best block notify command, non-blocking
+  if (this.options.blockNotify) {
+    const cmd = util.fmt(this.options.blockNotify, entry.rhash());
+    this._notifies.cmds.push(cmd);
+    this._handleBlockNotify();
+  }
+
+  this._handleSubscription(block, entry.height);
+
   // Expose the new state.
   this.tip = entry;
   this.height = entry.height;
@@ -1189,6 +1210,143 @@ Chain.prototype.setBestChain = async function setBestChain(entry, block, prev, f
 
   await this.fire('connect', entry, block, view);
 };
+
+/**
+ * Handle block notification.
+ * @private
+ * @param {Block} block
+ */
+
+Chain.prototype._handleBlockNotify = function _handleBlockNotify() {
+  if (!this._notifies.cmds.length || this._notifies.cp)
+    return;
+
+  try {
+    const cp = exec(this._notifies.cmds[0], (err, stdout, stderr) => {
+      this._notifies.cmds.shift();
+
+      if (err)
+        return this.logger.error(err);
+
+      if (stdout || stderr)
+        this.logger.debug(`stdout: ${stdout},\nstderr: ${stderr}`);
+    });
+
+    cp.on('close', code => {
+      this._notifies.cp = null;
+      this._handleBlockNotify();
+    });
+
+    this._notifies.cp = cp;
+  } catch(e) {
+    this.logger.error(e);
+  }
+};
+
+/**
+ * To subscribe event for addresses on balance changed.
+ * @private
+ * @param {Array} base58 addresses
+ * @param {Number} confirmation
+ */
+
+Chain.prototype.subscribe = function subscribe(addrs, confirmation) {
+  addrs.forEach(addr => this.subscribers[addr] = confirmation);
+};
+
+/**
+ * Unsubscribe event for addresses on balance changed.
+ * @private
+ * @param {Array} base58 addresses
+ */
+
+Chain.prototype.unsubscribe = function unsubscribe(addrs) {
+  addrs.forEach(addr => delete this.subscribers[addr]);
+};
+
+/**
+ * Handle subscription.
+ * @private
+ * @param {Block} block
+ */
+
+Chain.prototype._handleSubscription = function _handleSubscription(block, height) {
+  if (!this.options.subscribeCmd || !Object.keys(this.subscribers).length)
+    return;
+
+  try {
+    for (let tx of block.txs) {
+      for (let output of tx.outputs) {
+        const addr = output.getAddress();
+        if (!addr)
+          continue;
+
+        const address = addr.toString(this.network);
+        if (this.subscribers.hasOwnProperty(address)) {
+          const confirmation = this.subscribers[address];
+          let jobs = this.subscribeJobs[height+confirmation];
+
+          if (!jobs)
+            this.subscribeJobs[height+confirmation] = jobs = [];
+
+          jobs.push({address, hash: tx.rhash()});
+        }
+      }
+    }
+
+    this._handleSubscriptionJobs(height);
+  } catch(e) {
+    this.logger.error(e);
+  }
+};
+
+/**
+ * Handle subscription jobs, non-blocking.
+ * @private
+ * @param {Number} height
+ */
+
+Chain.prototype._handleSubscriptionJobs = function _handleSubscriptionJobs(height) {
+  if (!this.subscribeJobs[height])
+    return;
+
+  const cmds = [];
+  for (let {address, hash} of this.subscribeJobs[height]) {
+    const cmd = util.fmt(this.options.subscribeCmd, address, hash);
+    this._subscribes.cmds.push(cmd);
+  }
+
+  this._handleSubscriptionJob();
+  delete this.subscribeJobs[height];
+}
+
+/**
+ * Handle subscription job queue.
+ * @private
+ * @param {String} commands
+ */
+
+Chain.prototype._handleSubscriptionJob = function _handleSubscriptionJob() {
+  if (!this._subscribes.cmds.length || this._subscribes.cp)
+    return;
+
+  const cp = exec(this._subscribes.cmds[0], (err, stdout, stderr) => {
+    this._subscribes.cmds.shift();
+
+    if (err)
+      return this.logger.error(err);
+
+    if (stdout || stderr)
+      this.logger.debug(`stdout: ${stdout},\nstderr: ${stderr}`);
+  });
+
+  cp.on('close', code => {
+    this._subscribes.cp = null;
+    this._handleSubscriptionJob();
+  });
+
+  this._subscribes.cp = cp;
+}
 
 /**
  * Save block on an alternate chain.
@@ -2105,6 +2263,17 @@ Chain.prototype.getMetaByAddress = function getMetaByAddress(addrs) {
 };
 
 /**
+ * Get fifo coins pertinent to an address.
+ * @param {Address[]} addrs
+ * @param {Amount} minimum amount
+ * @returns {Promise} - Returns {@link Coin}[].
+ */
+
+Chain.prototype.getFifoByAddress = function getFifoByAddress(addr, min) {
+  return this.db.getFifoByAddress(addr, min);
+};
+
+/**
  * Get an orphan block.
  * @param {Hash} hash
  * @returns {Block}
@@ -2790,6 +2959,9 @@ function ChainOptions(options) {
   this.maxOrphans = 20;
   this.checkpoints = true;
 
+  this.blockNotify = null;
+  this.subscribeCmd = null;
+
   if (options)
     this.fromOptions(options);
 }
@@ -2901,6 +3073,16 @@ ChainOptions.prototype.fromOptions = function fromOptions(options) {
   if (options.checkpoints != null) {
     assert(typeof options.checkpoints === 'boolean');
     this.checkpoints = options.checkpoints;
+  }
+
+  if (options.blockNotify != null) {
+    assert(typeof options.blockNotify === 'string');
+    this.blockNotify = options.blockNotify;
+  }
+
+  if (options.subscribeCmd != null) {
+    assert(typeof options.subscribeCmd === 'string');
+    this.subscribeCmd = options.subscribeCmd;
   }
 
   return this;
